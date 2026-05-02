@@ -1,103 +1,150 @@
 "use client";
 
+import { useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import ModuleMenu from "@/components/ModuleMenu";
+import QuestionCard from "@/components/QuestionCard";
 import { useAssessmentStore } from "@/store/assessment-store";
 import type { Module } from "@/types/database";
-import { getStartingTier } from "@/lib/adaptive";
-
-const MODULES: { key: Module; label: string; description: string }[] = [
-  {
-    key: "quantitative",
-    label: "Quantitative Reasoning",
-    description:
-      "Number reasoning, patterns, quantitative analogies, and logic",
-  },
-  {
-    key: "verbal",
-    label: "Verbal Reasoning",
-    description:
-      "Analogies, vocabulary, reading comprehension, and language reasoning",
-  },
-];
 
 export default function AssessmentPage() {
-  const { currentModule, isComplete, totalAnswered, startSession, reset } =
-    useAssessmentStore();
+  const router = useRouter();
+  const {
+    studentName,
+    currentModule,
+    currentTier,
+    currentQuestion,
+    usedQuestionIds,
+    totalAnswered,
+    isComplete,
+    isLoading,
+    completedModules,
+    startModule,
+    setCurrentQuestion,
+    setLoading,
+    recordAnswer,
+    completeModule,
+  } = useAssessmentStore();
 
-  if (isComplete) {
+  // Redirect to setup if no student name
+  useEffect(() => {
+    if (!studentName) {
+      router.push("/");
+    }
+  }, [studentName, router]);
+
+  // Fetch next question when module starts or after an answer
+  const fetchQuestion = useCallback(async () => {
+    if (!currentModule || isComplete) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch("/api/next-question", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentModule,
+          currentTier,
+          usedIds: usedQuestionIds,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentQuestion(data.question);
+      } else {
+        // No more questions available — end the session
+        completeModule();
+        if (completedModules.length + 1 >= 2) {
+          router.push("/results");
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch question:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    currentModule,
+    currentTier,
+    usedQuestionIds,
+    isComplete,
+    setCurrentQuestion,
+    setLoading,
+    completeModule,
+    completedModules.length,
+    router,
+  ]);
+
+  // Fetch first question when module starts
+  useEffect(() => {
+    if (currentModule && !currentQuestion && !isComplete && !isLoading) {
+      fetchQuestion();
+    }
+  }, [currentModule, currentQuestion, isComplete, isLoading, fetchQuestion]);
+
+  // Handle session completion
+  useEffect(() => {
+    if (isComplete && currentModule) {
+      completeModule();
+      // If both modules done, go to results
+      if (completedModules.length + 1 >= 2) {
+        router.push("/results");
+      }
+    }
+  }, [isComplete, currentModule, completeModule, completedModules.length, router]);
+
+  const handleSelectModule = (module: Module) => {
+    startModule(module);
+  };
+
+  const handleAnswer = (selectedIndex: number) => {
+    recordAnswer(selectedIndex);
+
+    // After recording, fetch the next question (with delay for feedback)
+    if (totalAnswered + 1 < 20) {
+      setTimeout(() => {
+        fetchQuestion();
+      }, 1300);
+    }
+  };
+
+  // No student — wait for redirect
+  if (!studentName) return null;
+
+  // No module selected — show module menu
+  if (!currentModule) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen gap-8 p-8">
-        <div className="max-w-md text-center">
-          <h1 className="text-3xl font-bold mb-4">Session Complete</h1>
-          <p className="text-lg text-zinc-600 dark:text-zinc-400 mb-2">
-            You answered {totalAnswered} questions.
-          </p>
-          <p className="text-sm text-zinc-500 dark:text-zinc-500 mb-8">
-            Your results are being processed. Connect Supabase to save and view
-            your full report.
-          </p>
-          <button
-            onClick={reset}
-            className="rounded-full bg-foreground text-background px-6 py-3 font-medium hover:opacity-90 transition-opacity"
-          >
-            Start New Session
-          </button>
+      <ModuleMenu
+        onSelectModule={handleSelectModule}
+        completedModules={completedModules}
+      />
+    );
+  }
+
+  // Loading state
+  if (isLoading && !currentQuestion) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#FAF7F0]">
+        <div className="text-center">
+          <div className="w-10 h-10 border-4 border-[#B8892A] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-[#1A2744]/60 font-medium">Loading question...</p>
         </div>
       </div>
     );
   }
 
-  if (currentModule) {
+  // Show question
+  if (currentQuestion) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen gap-8 p-8">
-        <div className="max-w-lg text-center">
-          <h1 className="text-2xl font-bold mb-2">
-            {currentModule === "quantitative"
-              ? "Quantitative Reasoning"
-              : "Verbal Reasoning"}
-          </h1>
-          <p className="text-zinc-600 dark:text-zinc-400 mb-8">
-            Question {totalAnswered + 1} of 20
-          </p>
-          <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-8 mb-6">
-            <p className="text-lg">
-              Connect Supabase and populate the question bank to begin the
-              adaptive assessment.
-            </p>
-          </div>
-          <p className="text-sm text-zinc-500">
-            Questions are fetched one at a time from the Supabase{" "}
-            <code className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-1 py-0.5 rounded">
-              questions
-            </code>{" "}
-            table, filtered by module and tier.
-          </p>
-        </div>
-      </div>
+      <QuestionCard
+        question={currentQuestion}
+        questionNumber={totalAnswered + 1}
+        totalQuestions={20}
+        onAnswer={handleAnswer}
+      />
     );
   }
 
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen gap-8 p-8">
-      <div className="max-w-xl text-center">
-        <h1 className="text-3xl font-bold mb-2">Aptitude Assessment</h1>
-        <p className="text-zinc-600 dark:text-zinc-400 mb-8">
-          Select a module to begin your adaptive assessment session.
-        </p>
-      </div>
-      <div className="grid gap-4 w-full max-w-md">
-        {MODULES.map((mod) => (
-          <button
-            key={mod.key}
-            onClick={() => startSession(mod.key, getStartingTier(6))}
-            className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-6 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors"
-          >
-            <h2 className="text-lg font-semibold mb-1">{mod.label}</h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              {mod.description}
-            </p>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+  return null;
 }

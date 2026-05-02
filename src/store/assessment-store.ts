@@ -1,59 +1,105 @@
 import { create } from "zustand";
-import type { Module, Tier, Question } from "@/types/database";
+import type { Module, Tier, Question, QuestionType, PercentileBand } from "@/types/database";
+import { adjustTier, getStartingTier } from "@/lib/adaptive";
+import {
+  calculateGEScore,
+  getPercentileBand,
+  calculateGrowthGap,
+  identifyWeakTypes,
+  getHighestTierReached,
+} from "@/lib/scoring";
+
+interface ModuleResult {
+  module: Module;
+  rawScore: number;
+  totalQuestions: number;
+  geScore: number;
+  percentileBand: PercentileBand;
+  growthGap: number;
+  tierReached: Tier;
+  strongTypes: QuestionType[];
+  weakTypes: QuestionType[];
+}
 
 interface AssessmentState {
-  /** Current module being taken */
-  currentModule: Module | null;
-  /** Current adaptive tier */
-  currentTier: Tier;
-  /** IDs of questions already shown (prevents repeats) */
-  usedQuestionIds: string[];
-  /** Questions answered correctly (for GE calculation) */
-  correctAnswers: { questionId: string; difficultyWeight: number }[];
-  /** Total questions answered */
-  totalAnswered: number;
-  /** Consecutive correct count (for level-up logic) */
-  consecutiveCorrect: number;
-  /** Consecutive incorrect count (for level-down logic) */
-  consecutiveIncorrect: number;
-  /** The current question being displayed */
-  currentQuestion: Question | null;
-  /** Whether the session is complete */
-  isComplete: boolean;
+  /* Student info */
+  studentName: string;
+  enrolledGrade: number;
 
-  /** Actions */
-  startSession: (module: Module, startingTier: Tier) => void;
+  /* Session state */
+  currentModule: Module | null;
+  currentTier: Tier;
+  usedQuestionIds: string[];
+  currentQuestion: Question | null;
+  totalAnswered: number;
+  consecutiveCorrect: number;
+  consecutiveIncorrect: number;
+  isComplete: boolean;
+  isLoading: boolean;
+
+  /* Answer tracking for scoring */
+  correctDifficultyWeights: number[];
+  tierHistory: Tier[];
+  answers: { type: QuestionType; correct: boolean }[];
+
+  /* Completed module results */
+  completedModules: Module[];
+  results: ModuleResult[];
+
+  /* Actions */
+  setStudent: (name: string, grade: number) => void;
+  startModule: (module: Module) => void;
   setCurrentQuestion: (question: Question) => void;
-  recordAnswer: (isCorrect: boolean, difficultyWeight: number) => void;
-  endSession: () => void;
+  setLoading: (loading: boolean) => void;
+  recordAnswer: (selectedIndex: number) => void;
+  completeModule: () => void;
   reset: () => void;
 }
 
 const QUESTIONS_PER_SESSION = 20;
 
-export const useAssessmentStore = create<AssessmentState>((set) => ({
+export const useAssessmentStore = create<AssessmentState>((set, get) => ({
+  studentName: "",
+  enrolledGrade: 5,
+
   currentModule: null,
-  currentTier: 1,
+  currentTier: 2,
   usedQuestionIds: [],
-  correctAnswers: [],
+  currentQuestion: null,
   totalAnswered: 0,
   consecutiveCorrect: 0,
   consecutiveIncorrect: 0,
-  currentQuestion: null,
   isComplete: false,
+  isLoading: false,
 
-  startSession: (module, startingTier) =>
+  correctDifficultyWeights: [],
+  tierHistory: [],
+  answers: [],
+
+  completedModules: [],
+  results: [],
+
+  setStudent: (name, grade) =>
+    set({ studentName: name, enrolledGrade: grade }),
+
+  startModule: (module) => {
+    const grade = get().enrolledGrade;
+    const startingTier = getStartingTier(grade);
     set({
       currentModule: module,
       currentTier: startingTier,
       usedQuestionIds: [],
-      correctAnswers: [],
+      currentQuestion: null,
       totalAnswered: 0,
       consecutiveCorrect: 0,
       consecutiveIncorrect: 0,
-      currentQuestion: null,
       isComplete: false,
-    }),
+      isLoading: false,
+      correctDifficultyWeights: [],
+      tierHistory: [startingTier],
+      answers: [],
+    });
+  },
 
   setCurrentQuestion: (question) =>
     set((state) => ({
@@ -61,62 +107,117 @@ export const useAssessmentStore = create<AssessmentState>((set) => ({
       usedQuestionIds: [...state.usedQuestionIds, question.id],
     })),
 
-  recordAnswer: (isCorrect, difficultyWeight) =>
-    set((state) => {
-      const totalAnswered = state.totalAnswered + 1;
-      const correctAnswers = isCorrect
-        ? [
-            ...state.correctAnswers,
-            {
-              questionId: state.currentQuestion?.id ?? "",
-              difficultyWeight,
-            },
-          ]
-        : state.correctAnswers;
+  setLoading: (loading) => set({ isLoading: loading }),
 
-      let consecutiveCorrect = isCorrect ? state.consecutiveCorrect + 1 : 0;
-      let consecutiveIncorrect = isCorrect
+  recordAnswer: (selectedIndex) =>
+    set((state) => {
+      const question = state.currentQuestion;
+      if (!question) return state;
+
+      const isCorrect = selectedIndex === question.correct_answer;
+      const totalAnswered = state.totalAnswered + 1;
+
+      const correctDifficultyWeights = isCorrect
+        ? [...state.correctDifficultyWeights, question.difficulty_weight]
+        : state.correctDifficultyWeights;
+
+      const newConsecutiveCorrect = isCorrect
+        ? state.consecutiveCorrect + 1
+        : 0;
+      const newConsecutiveIncorrect = isCorrect
         ? 0
         : state.consecutiveIncorrect + 1;
-      let currentTier = state.currentTier;
 
-      // Adaptive branching: 3 correct → level up, 2 incorrect → level down
-      if (consecutiveCorrect >= 3 && currentTier < 4) {
-        currentTier = (currentTier + 1) as Tier;
-        consecutiveCorrect = 0;
-      }
-      if (consecutiveIncorrect >= 2 && currentTier > 1) {
-        currentTier = (currentTier - 1) as Tier;
-        consecutiveIncorrect = 0;
-      }
+      const answers = [
+        ...state.answers,
+        { type: question.type, correct: isCorrect },
+      ];
+
+      // Apply adaptive branching logic
+      const { newTier, shouldEnd, resetCorrect, resetIncorrect } = adjustTier(
+        state.currentTier,
+        newConsecutiveCorrect,
+        newConsecutiveIncorrect
+      );
+
+      const tierHistory = [...state.tierHistory, newTier];
 
       const isComplete =
-        totalAnswered >= QUESTIONS_PER_SESSION ||
-        (consecutiveIncorrect >= 2 && currentTier === 1) ||
-        (consecutiveCorrect >= 3 && currentTier === 4);
+        shouldEnd || totalAnswered >= QUESTIONS_PER_SESSION;
 
       return {
-        correctAnswers,
         totalAnswered,
-        consecutiveCorrect,
-        consecutiveIncorrect,
-        currentTier,
+        correctDifficultyWeights,
+        consecutiveCorrect: resetCorrect ? 0 : newConsecutiveCorrect,
+        consecutiveIncorrect: resetIncorrect ? 0 : newConsecutiveIncorrect,
+        currentTier: newTier,
+        tierHistory,
+        answers,
         isComplete,
       };
     }),
 
-  endSession: () => set({ isComplete: true }),
+  completeModule: () =>
+    set((state) => {
+      const rawScore = state.correctDifficultyWeights.length;
+      const totalQuestions = state.totalAnswered;
+      const geScore = calculateGEScore(state.correctDifficultyWeights);
+      const percentileBand = getPercentileBand(rawScore, totalQuestions);
+      const growthGap = calculateGrowthGap(geScore, state.enrolledGrade);
+      const tierReached = getHighestTierReached(state.tierHistory);
+      const weakTypes = identifyWeakTypes(state.answers);
+
+      // Strong types = types where ≥75% correct
+      const typeStats: Record<string, { total: number; correct: number }> = {};
+      for (const a of state.answers) {
+        if (!typeStats[a.type]) typeStats[a.type] = { total: 0, correct: 0 };
+        typeStats[a.type].total++;
+        if (a.correct) typeStats[a.type].correct++;
+      }
+      const strongTypes: QuestionType[] = [];
+      for (const [type, stats] of Object.entries(typeStats)) {
+        if (stats.correct / stats.total >= 0.75) {
+          strongTypes.push(type as QuestionType);
+        }
+      }
+
+      const result: ModuleResult = {
+        module: state.currentModule!,
+        rawScore,
+        totalQuestions,
+        geScore,
+        percentileBand,
+        growthGap,
+        tierReached,
+        strongTypes,
+        weakTypes,
+      };
+
+      return {
+        completedModules: [...state.completedModules, state.currentModule!],
+        results: [...state.results, result],
+        currentModule: null,
+        currentQuestion: null,
+      };
+    }),
 
   reset: () =>
     set({
+      studentName: "",
+      enrolledGrade: 5,
       currentModule: null,
-      currentTier: 1,
+      currentTier: 2,
       usedQuestionIds: [],
-      correctAnswers: [],
+      currentQuestion: null,
       totalAnswered: 0,
       consecutiveCorrect: 0,
       consecutiveIncorrect: 0,
-      currentQuestion: null,
       isComplete: false,
+      isLoading: false,
+      correctDifficultyWeights: [],
+      tierHistory: [],
+      answers: [],
+      completedModules: [],
+      results: [],
     }),
 }));

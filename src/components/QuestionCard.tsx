@@ -7,7 +7,7 @@ interface QuestionCardProps {
   question: Question;
   questionNumber: number;
   totalQuestions: number;
-  onAnswer: (selectedIndex: number, isCorrect: boolean) => void;
+  onAnswer: (selectedIndex: number, isCorrect?: boolean) => void;
 }
 
 const OPTION_LETTERS = ["A", "B", "C", "D"];
