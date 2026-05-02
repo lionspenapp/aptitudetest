@@ -19,6 +19,14 @@ export type PercentileBand =
   | "Developing"
   | "Needs Support";
 
+export interface Student {
+  id: string;
+  full_name: string;
+  grade_level: number;
+  parent_email: string | null;
+  created_at: string;
+}
+
 export interface Question {
   id: string;
   module: Module;
@@ -49,11 +57,18 @@ export interface AssessmentSession {
 
 /**
  * Supabase-compatible Database type used by the generated client.
- * Extend as tables are added.
  */
 export interface Database {
   public: {
     Tables: {
+      students: {
+        Row: Student;
+        Insert: Omit<Student, "id" | "created_at"> & {
+          id?: string;
+          created_at?: string;
+        };
+        Update: Partial<Omit<Student, "id">>;
+      };
       questions: {
         Row: Question;
         Insert: Omit<Question, "id" | "created_at"> & {
