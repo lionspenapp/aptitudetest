@@ -2,20 +2,37 @@
 
 ## Cursor Cloud specific instructions
 
-This repository (`aptitudetest` — "national normed level assessment") is currently an **empty skeleton**. The `main` branch contains only a `README.md` with a project title—no application code, dependencies, build configuration, or services exist yet.
+### Project overview
 
-### What's here
+Lion's Pen Aptitude Assessment — a Next.js 16 (App Router) + Supabase + Tailwind CSS application for nationally-normed adaptive cognitive testing (Grades 3–8). See `README.md` for the full tech stack table and project structure.
 
-- `README.md` — project title and one-line description.
+### Running the dev server
 
-### Development environment
+```bash
+npm run dev          # starts on http://localhost:3000
+```
 
-No language runtime, package manager, or build tool is required at this time. Once application code is added, update this section and the VM update script accordingly.
+The app starts without a live Supabase connection (placeholder env vars in `.env.local`). Pages render; Supabase queries will fail until real credentials are supplied.
 
-### Running services
+### Lint / Build / Test
 
-There are no services to start. Future agents should check for newly added `package.json`, `requirements.txt`, `docker-compose.yml`, or similar files and adjust setup accordingly.
+```bash
+npm run lint         # ESLint
+npm run build        # production build (also type-checks)
+```
 
-### Lint / Test / Build
+No test framework is configured yet. When one is added, document the command here.
 
-No lint, test, or build commands are available yet. When they are added, document the commands here.
+### Supabase migrations
+
+Migration SQL lives in `supabase/migrations/`. Apply with the Supabase CLI (`supabase db push`) or paste into the Supabase SQL editor.
+
+### Environment variables
+
+Copy `.env.local.example` → `.env.local` and fill in Supabase credentials. `ANTHROPIC_API_KEY` is optional (enables narrative report generation via `/api/generate-report`).
+
+### Key caveats
+
+- The Supabase client files (`src/lib/supabase-client.ts`, `src/lib/supabase-server.ts`) reference `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` at runtime. The app will start but Supabase calls will throw if these are placeholders.
+- Zustand store (`src/store/assessment-store.ts`) holds session state in memory — no persistence yet.
+- `src/app/api/generate-report/route.ts` is a server-side API route. Never expose `ANTHROPIC_API_KEY` to the client.
