@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
+import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 
 /**
@@ -11,16 +10,7 @@ import type { Database } from "@/types/database";
  * - currentTier (1 | 2 | 3 | 4)
  * - usedIds (array of already-shown question UUIDs)
  *
- * Returns one random question from the matching pool, excluding used items.
- * This matches the Supabase fetch logic from the product plan:
- *
- * supabase.from("questions")
- *   .select("*")
- *   .eq("module", currentModule)
- *   .eq("tier", currentTier)
- *   .not("id", "in", usedIds)
- *   .order("random()")
- *   .limit(1)
+ * Uses a simple Supabase client (no cookies needed — questions are public).
  */
 export async function POST(request: NextRequest) {
   try {
@@ -34,26 +24,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const cookieStore = await cookies();
-    const supabase = createServerClient<Database>(
+    const supabase = createClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // Server Component context — safe to ignore
-            }
-          },
-        },
-      }
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
     let query = supabase
@@ -67,7 +40,7 @@ export async function POST(request: NextRequest) {
       query = query.not("id", "in", `(${usedIds.join(",")})`);
     }
 
-    // Fetch one random question from the filtered pool
+    // Fetch one question from the filtered pool
     const { data, error } = await query.limit(1).single();
 
     if (error || !data) {
