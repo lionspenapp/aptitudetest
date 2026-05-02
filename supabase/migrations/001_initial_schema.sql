@@ -45,3 +45,35 @@ create table assessment_sessions (
   weak_types      text[],                    -- question types missed
   completed_at    timestamp default now()
 );
+
+-- ============================================================================
+-- Row Level Security (RLS)
+-- ============================================================================
+
+-- Enable RLS on all tables
+alter table students enable row level security;
+alter table questions enable row level security;
+alter table assessment_sessions enable row level security;
+
+-- Questions are public content — anyone can read them
+create policy "Questions are publicly readable"
+  on questions for select
+  using (true);
+
+-- Students: only authenticated users can read/insert their own data
+create policy "Users can view their own student record"
+  on students for select
+  using (auth.uid() = id);
+
+create policy "Users can insert their own student record"
+  on students for insert
+  with check (auth.uid() = id);
+
+-- Assessment sessions: users can only access their own sessions
+create policy "Users can view their own sessions"
+  on assessment_sessions for select
+  using (auth.uid() = student_id);
+
+create policy "Users can insert their own sessions"
+  on assessment_sessions for insert
+  with check (auth.uid() = student_id);
