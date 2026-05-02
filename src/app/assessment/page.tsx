@@ -1,30 +1,32 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ModuleMenu from "@/components/ModuleMenu";
 import QuestionCard from "@/components/QuestionCard";
 import { useAssessmentStore } from "@/store/assessment-store";
-import type { Module } from "@/types/database";
+import type { Module, Question } from "@/types/database";
 
 export default function AssessmentPage() {
   const router = useRouter();
   const {
     studentName,
+    enrolledGrade,
     currentModule,
     currentTier,
-    currentQuestion,
     usedQuestionIds,
     totalAnswered,
     isComplete,
-    isLoading,
     completedModules,
     startModule,
     setCurrentQuestion,
-    setLoading,
     recordAnswer,
     completeModule,
   } = useAssessmentStore();
+
+  const [question, setQuestion] = useState<Question | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [needsFetch, setNeedsFetch] = useState(false);
 
   // Redirect to setup if no student name
   useEffect(() => {
@@ -33,80 +35,80 @@ export default function AssessmentPage() {
     }
   }, [studentName, router]);
 
-  // Fetch next question when module starts or after an answer
-  const fetchQuestion = useCallback(async () => {
-    if (!currentModule || isComplete) return;
-
-    setLoading(true);
-    try {
-      const res = await fetch("/api/next-question", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          currentModule,
-          currentTier,
-          usedIds: usedQuestionIds,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentQuestion(data.question);
-      } else {
-        // No more questions available — end the session
-        completeModule();
-        if (completedModules.length + 1 >= 2) {
-          router.push("/results");
-        }
-      }
-    } catch (error) {
-      console.error("Failed to fetch question:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    currentModule,
-    currentTier,
-    usedQuestionIds,
-    isComplete,
-    setCurrentQuestion,
-    setLoading,
-    completeModule,
-    completedModules.length,
-    router,
-  ]);
-
-  // Fetch first question when module starts
+  // Trigger fetch when module starts
   useEffect(() => {
-    if (currentModule && !currentQuestion && !isComplete && !isLoading) {
-      fetchQuestion();
+    if (currentModule && !question && !loading) {
+      setNeedsFetch(true);
     }
-  }, [currentModule, currentQuestion, isComplete, isLoading, fetchQuestion]);
+  }, [currentModule, question, loading]);
+
+  // Fetch question when needed
+  useEffect(() => {
+    if (!needsFetch || !currentModule || isComplete) return;
+
+    setNeedsFetch(false);
+    setLoading(true);
+
+    fetch("/api/next-question", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        currentModule,
+        currentTier,
+        usedIds: usedQuestionIds,
+      }),
+    })
+      .then((res) => {
+        if (res.ok) return res.json();
+        return null;
+      })
+      .then((data) => {
+        if (data?.question) {
+          setQuestion(data.question);
+          setCurrentQuestion(data.question);
+        } else {
+          // No more questions — end module
+          handleModuleComplete();
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to fetch question:", err);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [needsFetch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle session completion
   useEffect(() => {
     if (isComplete && currentModule) {
-      completeModule();
-      // If both modules done, go to results
-      if (completedModules.length + 1 >= 2) {
-        router.push("/results");
-      }
+      handleModuleComplete();
     }
-  }, [isComplete, currentModule, completeModule, completedModules.length, router]);
+  }, [isComplete]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleModuleComplete() {
+    completeModule();
+    setQuestion(null);
+    // If both modules done, go to results
+    if (completedModules.length + 1 >= 2) {
+      router.push("/results");
+    }
+  }
 
   const handleSelectModule = (module: Module) => {
+    setQuestion(null);
     startModule(module);
+    setNeedsFetch(true);
   };
 
   const handleAnswer = (selectedIndex: number) => {
     recordAnswer(selectedIndex);
 
-    // After recording, fetch the next question (with delay for feedback)
-    if (totalAnswered + 1 < 20) {
-      setTimeout(() => {
-        fetchQuestion();
-      }, 1300);
-    }
+    // Clear current question and fetch next after feedback delay
+    setTimeout(() => {
+      setQuestion(null);
+      setNeedsFetch(true);
+    }, 1300);
   };
 
   // No student — wait for redirect
@@ -123,7 +125,7 @@ export default function AssessmentPage() {
   }
 
   // Loading state
-  if (isLoading && !currentQuestion) {
+  if (loading && !question) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#FAF7F0]">
         <div className="text-center">
@@ -135,10 +137,10 @@ export default function AssessmentPage() {
   }
 
   // Show question
-  if (currentQuestion) {
+  if (question) {
     return (
       <QuestionCard
-        question={currentQuestion}
+        question={question}
         questionNumber={totalAnswered + 1}
         totalQuestions={20}
         onAnswer={handleAnswer}
