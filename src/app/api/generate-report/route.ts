@@ -3,9 +3,21 @@ import { NextRequest, NextResponse } from "next/server";
 /**
  * POST /api/generate-report
  *
- * Accepts a scoring summary and returns an AI-generated narrative report
- * paragraph using the Anthropic Claude API (when ANTHROPIC_API_KEY is set).
- * Without the key the endpoint returns a 503 with a structured fallback hint.
+ * Server-side API route for Claude narrative report generation.
+ * ⚠ NEVER expose the Anthropic API key client-side.
+ *
+ * The client sends only the scoring summary — the server calls Claude.
+ * Without ANTHROPIC_API_KEY, returns 503 with a hint that the local
+ * structured report is still complete without the narrative.
+ *
+ * Request body:
+ * {
+ *   studentName, enrolledGrade, quantitativeGE, verbalGE,
+ *   compositeGE, growthGap, strengths[], growthAreas[]
+ * }
+ *
+ * Response:
+ * { narrative: "3-paragraph personalized narrative..." }
  */
 export async function POST(request: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -36,7 +48,7 @@ export async function POST(request: NextRequest) {
         messages: [
           {
             role: "user",
-            content: `You are a school psychologist writing a quarterly assessment summary.
+            content: `You are a school psychologist writing a quarterly assessment summary for a Lion's Pen student.
 Write a 3-paragraph personalized narrative based on this scoring data:
 
 Student: ${body.studentName ?? "Student"}
@@ -48,7 +60,9 @@ Growth Gap: ${body.growthGap ?? "N/A"}
 Strengths: ${body.strengths?.join(", ") ?? "N/A"}
 Growth Areas: ${body.growthAreas?.join(", ") ?? "N/A"}
 
-Write in a warm, professional tone suitable for parents and educators.`,
+Write in a warm, professional tone suitable for parents and educators.
+Focus on celebrating cognitive strengths while framing growth areas as opportunities.
+Reference the Grade Equivalent score and what it means relative to national norms.`,
           },
         ],
       }),

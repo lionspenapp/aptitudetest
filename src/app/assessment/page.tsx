@@ -2,7 +2,7 @@
 
 import { useAssessmentStore } from "@/store/assessment-store";
 import type { Module } from "@/types/database";
-import { getStartingTier } from "@/lib/scoring";
+import { getStartingTier } from "@/lib/adaptive";
 
 const MODULES: { key: Module; label: string; description: string }[] = [
   {
