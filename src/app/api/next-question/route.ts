@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
+import { NIL_UUID } from "@/lib/adaptive";
 
 /**
  * POST /api/next-question
@@ -8,14 +9,22 @@ import type { Database } from "@/types/database";
  * Fetches the next adaptive question from Supabase based on:
  * - currentModule ("quantitative" | "verbal")
  * - currentTier (1 | 2 | 3 | 4)
- * - usedIds (array of already-shown question UUIDs)
+ * - usedIds (array of already-shown question UUIDs across the *full module*,
+ *   so Part 2 never repeats Part 1's questions)
  *
- * Uses a simple Supabase client (no cookies needed — questions are public).
+ * Excludes already-used IDs using a sentinel UUID when the list is empty so
+ * the Postgrest `not in` clause is always well-formed:
+ *
+ *   .not('id', 'in', `(${usedIds.length > 0 ? usedIds.join(',') : NIL_UUID})`)
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { currentModule, currentTier, usedIds = [] } = body;
+    const { currentModule, currentTier, usedIds = [] } = body as {
+      currentModule?: string;
+      currentTier?: number;
+      usedIds?: string[];
+    };
 
     if (!currentModule || !currentTier) {
       return NextResponse.json(
@@ -29,19 +38,16 @@ export async function POST(request: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
-    let query = supabase
+    const excludedIds = `(${usedIds.length > 0 ? usedIds.join(",") : NIL_UUID})`;
+
+    const { data, error } = await supabase
       .from("questions")
       .select("*")
       .eq("module", currentModule)
-      .eq("tier", currentTier);
-
-    // Exclude already-used questions (no repeats)
-    if (usedIds.length > 0) {
-      query = query.not("id", "in", `(${usedIds.join(",")})`);
-    }
-
-    // Fetch one question from the filtered pool
-    const { data, error } = await query.limit(1).single();
+      .eq("tier", currentTier)
+      .not("id", "in", excludedIds)
+      .limit(1)
+      .single();
 
     if (error || !data) {
       return NextResponse.json(
