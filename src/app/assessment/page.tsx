@@ -33,7 +33,10 @@ export default function AssessmentPage() {
 
   const [question, setQuestion] = useState<Question | null>(null);
   const [loading, setLoading] = useState(false);
-  const [needsFetch, setNeedsFetch] = useState(false);
+  // Monotonic counter — every increment guarantees the fetch effect fires
+  // again, even if previous flags were left stale by a part ending naturally.
+  const [fetchToken, setFetchToken] = useState(0);
+  const requestFetch = () => setFetchToken((t) => t + 1);
 
   useEffect(() => {
     if (!studentName) {
@@ -42,17 +45,15 @@ export default function AssessmentPage() {
   }, [studentName, router]);
 
   useEffect(() => {
-    if (currentModule && currentPart && !question && !loading) {
-      setNeedsFetch(true);
-    }
-  }, [currentModule, currentPart, question, loading]);
-
-  useEffect(() => {
-    if (!needsFetch || !currentModule || !currentPart || isPartComplete) {
+    if (
+      fetchToken === 0 ||
+      !currentModule ||
+      !currentPart ||
+      isPartComplete
+    ) {
       return;
     }
 
-    setNeedsFetch(false);
     setLoading(true);
 
     fetch("/api/next-question", {
@@ -79,7 +80,7 @@ export default function AssessmentPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, [needsFetch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (isPartComplete && currentModule && currentPart) {
@@ -143,8 +144,9 @@ export default function AssessmentPage() {
 
   const handleSelectPart = (mod: Module, part: PartNumber) => {
     setQuestion(null);
+    setLoading(false);
     startPart(mod, part);
-    setNeedsFetch(true);
+    requestFetch();
   };
 
   const handleViewReport = () => {
@@ -155,7 +157,7 @@ export default function AssessmentPage() {
     recordAnswer(selectedIndex);
     setTimeout(() => {
       setQuestion(null);
-      setNeedsFetch(true);
+      requestFetch();
     }, 1300);
   };
 
