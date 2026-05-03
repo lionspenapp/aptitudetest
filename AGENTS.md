@@ -36,5 +36,4 @@ Migration SQL lives in `supabase/migrations/`. Apply with the Supabase CLI (`sup
 - The Supabase client files (`src/lib/supabase-client.ts`, `src/lib/supabase-server.ts`) reference `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` at runtime. The app will start but Supabase calls will throw if these are placeholders.
 - Zustand store (`src/store/assessment-store.ts`) holds session state in memory — no persistence yet.
 - `src/app/api/generate-report/route.ts` is a server-side API route. Never expose `ANTHROPIC_API_KEY` to the client.
-- `npm run lint` exits with code 1 due to pre-existing ESLint errors in `src/app/assessment/page.tsx` (React hooks `set-state-in-effect` and `immutability` rules). These are not regressions — do not attempt to fix unless explicitly asked.
 - If `.env.local` does not exist, copy it from `.env.local.example` before starting the dev server.
