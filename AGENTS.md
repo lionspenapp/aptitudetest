@@ -19,9 +19,11 @@ Supabase credentials are available as environment secrets (`NEXT_PUBLIC_SUPABASE
 ```bash
 npm run lint         # ESLint
 npm run build        # production build (also type-checks)
+npm test             # Vitest (run once)
+npm run test:watch   # Vitest (watch mode)
 ```
 
-No test framework is configured yet. When one is added, document the command here.
+Tests live alongside source files as `*.test.ts` / `*.test.tsx`. Config is in `vitest.config.ts`.
 
 ### Supabase migrations
 
