@@ -2,12 +2,12 @@ import type { PercentileBand, QuestionType, Tier } from "@/types/database";
 
 /**
  * Local Report Generator — produces a complete structured report
- * without any API dependency. The Claude API narrative is optional.
+ * without any API dependency. The Claude API narrative (see
+ * /api/generate-report) is an optional enhancement that runs only after
+ * this local report is built.
  */
 
-interface ReportData {
-  studentName: string;
-  enrolledGrade: number;
+export interface ModuleReportData {
   module: "quantitative" | "verbal";
   rawScore: number;
   totalQuestions: number;
@@ -17,6 +17,21 @@ interface ReportData {
   tierReached: Tier;
   weakTypes: QuestionType[];
   strongTypes: QuestionType[];
+}
+
+export interface CompositeReport {
+  studentName: string;
+  enrolledGrade: number;
+  modules: ModuleReportData[];
+  composite: {
+    geScore: number;
+    growthGap: number;
+    percentileBand: PercentileBand;
+    strongTypes: QuestionType[];
+    weakTypes: QuestionType[];
+    tierReached: Tier;
+  } | null;
+  text: string;
 }
 
 const TIER_LABELS: Record<Tier, string> = {
@@ -31,17 +46,29 @@ const MODULE_LABELS = {
   verbal: "VERBAL APTITUDE",
 };
 
+const TYPE_LABELS: Record<QuestionType, string> = {
+  pattern: "Pattern Reasoning",
+  analogy: "Analogies",
+  reasoning: "Multi-step Reasoning",
+  vocab: "Vocabulary",
+  reading: "Reading Comprehension",
+  language: "Language Reasoning",
+  comparison: "Comparison Problems",
+  functional_logic: "Functional Logic",
+};
+
 /**
- * Generate the structured local report text (no API required).
+ * Generate the structured local report text for a single module.
+ *
  * Mirrors the sample report format from the product plan:
  *
- * QUANTITATIVE APTITUDE
- * Score: 14/20 · Grade Equivalent: 7.2 · Above Average (78th percentile)
- * Tier Reached: Advanced (Tier 3) · Growth Gap: +1.2 grade levels
- * Strongest Areas: Pattern Reasoning ✓, Quantitative Analogy ✓
- * Growth Areas: Comparison Problems, Multi-step Reasoning
+ *   QUANTITATIVE APTITUDE
+ *   Score: 27/40 · Grade Equivalent: 7.2 · Above Average
+ *   Tier Reached: Advanced (Tier 3) · Growth Gap: +1.2 grade levels
+ *   Strongest Areas: Pattern Reasoning ✓, Analogies ✓
+ *   Growth Areas: Comparison Problems, Multi-step Reasoning
  */
-export function generateStructuredReport(data: ReportData): string {
+export function generateStructuredReport(data: ModuleReportData): string {
   const gapSign = data.growthGap >= 0 ? "+" : "";
   const strongList =
     data.strongTypes.length > 0
@@ -60,60 +87,86 @@ Growth Areas: ${weakList}`;
 }
 
 /**
- * Generate a composite report combining both modules.
+ * Generate a composite report combining all completed modules.
+ * Returns both the structured object and a plain-text rendering.
  */
 export function generateCompositeReport(params: {
   studentName: string;
   enrolledGrade: number;
-  quantitative: ReportData | null;
-  verbal: ReportData | null;
-}): string {
-  const parts: string[] = [];
+  modules: ModuleReportData[];
+}): CompositeReport {
+  const { studentName, enrolledGrade, modules } = params;
+  const lines: string[] = [];
 
-  parts.push(`LION'S PEN APTITUDE ASSESSMENT REPORT`);
-  parts.push(`Student: ${params.studentName} · Grade ${params.enrolledGrade}`);
-  parts.push(`${"─".repeat(50)}`);
+  lines.push(`LION'S PEN APTITUDE ASSESSMENT REPORT`);
+  lines.push(`Student: ${studentName} · Grade ${enrolledGrade}`);
+  lines.push("─".repeat(50));
 
-  if (params.quantitative) {
-    parts.push("");
-    parts.push(generateStructuredReport(params.quantitative));
+  for (const m of modules) {
+    lines.push("");
+    lines.push(generateStructuredReport(m));
   }
 
-  if (params.verbal) {
-    parts.push("");
-    parts.push(generateStructuredReport(params.verbal));
-  }
+  let composite: CompositeReport["composite"] = null;
 
-  if (params.quantitative && params.verbal) {
+  if (modules.length > 0) {
     const compositeGE =
-      Math.round(((params.quantitative.geScore + params.verbal.geScore) / 2) * 10) / 10;
-    const compositeGap =
-      Math.round((compositeGE - params.enrolledGrade) * 10) / 10;
-    const gapSign = compositeGap >= 0 ? "+" : "";
+      Math.round(
+        (modules.reduce((acc, m) => acc + m.geScore, 0) / modules.length) * 10
+      ) / 10;
+    const compositeGap = Math.round((compositeGE - enrolledGrade) * 10) / 10;
+    const totalRaw = modules.reduce((acc, m) => acc + m.rawScore, 0);
+    const totalQuestions = modules.reduce(
+      (acc, m) => acc + m.totalQuestions,
+      0
+    );
+    const percentileBand =
+      totalQuestions > 0
+        ? bandFromPct((totalRaw / totalQuestions) * 100)
+        : ("Needs Support" as PercentileBand);
 
-    parts.push("");
-    parts.push(`${"─".repeat(50)}`);
-    parts.push(
-      `COMPOSITE GE: ${compositeGE} · Growth Gap: ${gapSign}${compositeGap} · ${params.quantitative.percentileBand}`
+    const strongTypes = uniqueTypes(modules.flatMap((m) => m.strongTypes));
+    const weakTypes = uniqueTypes(modules.flatMap((m) => m.weakTypes));
+    const tierReached = Math.max(...modules.map((m) => m.tierReached)) as Tier;
+
+    composite = {
+      geScore: compositeGE,
+      growthGap: compositeGap,
+      percentileBand,
+      strongTypes,
+      weakTypes,
+      tierReached,
+    };
+
+    const gapSign = compositeGap >= 0 ? "+" : "";
+    lines.push("");
+    lines.push("─".repeat(50));
+    lines.push(
+      `COMPOSITE GE: ${compositeGE} · Growth Gap: ${gapSign}${compositeGap} · ${percentileBand}`
     );
   }
 
-  return parts.join("\n");
+  return {
+    studentName,
+    enrolledGrade,
+    modules,
+    composite,
+    text: lines.join("\n"),
+  };
 }
 
-/**
- * Format question type slug into readable label.
- */
 function formatType(type: QuestionType): string {
-  const labels: Record<QuestionType, string> = {
-    pattern: "Pattern Reasoning",
-    analogy: "Analogies",
-    reasoning: "Multi-step Reasoning",
-    vocab: "Vocabulary",
-    reading: "Reading Comprehension",
-    language: "Language Reasoning",
-    comparison: "Comparison Problems",
-    functional_logic: "Functional Logic",
-  };
-  return labels[type] || type;
+  return TYPE_LABELS[type] || type;
+}
+
+function uniqueTypes(types: QuestionType[]): QuestionType[] {
+  return Array.from(new Set(types));
+}
+
+function bandFromPct(pct: number): PercentileBand {
+  if (pct >= 90) return "Superior";
+  if (pct >= 75) return "Above Average";
+  if (pct >= 50) return "Average";
+  if (pct >= 25) return "Developing";
+  return "Needs Support";
 }
