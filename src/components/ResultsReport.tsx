@@ -56,14 +56,29 @@ export default function ResultsReport({
   onStartNew,
 }: ResultsReportProps) {
   const compositeGE =
-    results.length === 2
-      ? Math.round(((results[0].geScore + results[1].geScore) / 2) * 10) / 10
-      : results[0]?.geScore ?? 0;
+    results.length > 0
+      ? Math.round(
+          (results.reduce((acc, r) => acc + r.geScore, 0) / results.length) *
+            10
+        ) / 10
+      : 0;
 
   const compositeGap =
     Math.round((compositeGE - enrolledGrade) * 10) / 10;
 
   const gapSign = compositeGap >= 0 ? "+" : "";
+
+  const compositePercentile: PercentileBand = (() => {
+    const totalRaw = results.reduce((acc, r) => acc + r.rawScore, 0);
+    const totalQ = results.reduce((acc, r) => acc + r.totalQuestions, 0);
+    if (totalQ === 0) return "Needs Support";
+    const pct = (totalRaw / totalQ) * 100;
+    if (pct >= 90) return "Superior";
+    if (pct >= 75) return "Above Average";
+    if (pct >= 50) return "Average";
+    if (pct >= 25) return "Developing";
+    return "Needs Support";
+  })();
 
   return (
     <div className="min-h-screen bg-[#FAF7F0] py-12 px-6">
@@ -90,11 +105,9 @@ export default function ResultsReport({
           </p>
           {results.length > 0 && (
             <span
-              className={`inline-block mt-4 px-4 py-1.5 rounded-full text-sm font-semibold ${
-                BAND_COLORS[results[0].percentileBand]
-              }`}
+              className={`inline-block mt-4 px-4 py-1.5 rounded-full text-sm font-semibold ${BAND_COLORS[compositePercentile]}`}
             >
-              {results[0].percentileBand}
+              {compositePercentile}
             </span>
           )}
         </div>
