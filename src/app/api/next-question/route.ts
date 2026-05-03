@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { Question, QuestionType } from "@/types/database";
 import { NIL_UUID } from "@/lib/adaptive";
 import { pickDiverseQuestion } from "@/lib/question-selection";
+import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase-env";
 
 /**
  * POST /api/next-question
@@ -52,10 +53,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
+    const url = getSupabaseUrl();
+    const key = getSupabaseAnonKey();
+    if (!url || !key) {
+      return NextResponse.json(
+        {
+          error: "Supabase not configured",
+          hint: "Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel → Settings → Environment Variables, then redeploy.",
+        },
+        { status: 503 }
+      );
+    }
+
+    const supabase = createClient(url, key);
 
     const excludedIds = `(${usedIds.length > 0 ? usedIds.join(",") : NIL_UUID})`;
 
