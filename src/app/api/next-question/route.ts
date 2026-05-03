@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import type { Question } from "@/types/database";
+import type { Question, QuestionType } from "@/types/database";
 import { NIL_UUID } from "@/lib/adaptive";
+import { pickDiverseQuestion } from "@/lib/question-selection";
 
 /**
  * POST /api/next-question
@@ -77,27 +78,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Count how many times each type has been seen recently (window=6 keeps
-    // us from penalising any one type forever).
-    const window = recentTypes.slice(-6);
-    const typeFrequency = new Map<string, number>();
-    for (const t of window) {
-      typeFrequency.set(t, (typeFrequency.get(t) ?? 0) + 1);
+    const picked = pickDiverseQuestion(candidates, recentTypes as QuestionType[]);
+    if (!picked) {
+      return NextResponse.json(
+        { error: "No questions available", details: "Selection failed" },
+        { status: 404 }
+      );
     }
-
-    // Bucket candidates by their recent-frequency. Lowest frequency wins.
-    let minFreq = Infinity;
-    const buckets = new Map<number, Question[]>();
-    for (const c of candidates) {
-      const freq = typeFrequency.get(c.type) ?? 0;
-      if (freq < minFreq) minFreq = freq;
-      const bucket = buckets.get(freq) ?? [];
-      bucket.push(c);
-      buckets.set(freq, bucket);
-    }
-
-    const preferred = buckets.get(minFreq) ?? candidates;
-    const picked = preferred[Math.floor(Math.random() * preferred.length)];
 
     return NextResponse.json({ question: picked });
   } catch (err) {
