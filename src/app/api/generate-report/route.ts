@@ -1,39 +1,82 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  generateCompositeReport,
+  type ModuleReportData,
+} from "@/lib/reportGenerator";
 
 /**
  * POST /api/generate-report
  *
- * Server-side API route for Claude narrative report generation.
- * ⚠ NEVER expose the Anthropic API key client-side.
+ * Builds the structured local report from scoring data, then attempts to
+ * augment it with a Claude-generated narrative. The local report is the
+ * primary deliverable — the narrative is an optional enhancement.
  *
- * The client sends only the scoring summary — the server calls Claude.
- * Without ANTHROPIC_API_KEY, returns 503 with a hint that the local
- * structured report is still complete without the narrative.
+ * - If ANTHROPIC_API_KEY is not configured, returns the local report with
+ *   `narrative: null` (HTTP 200).
+ * - If the Claude call fails, returns the local report with
+ *   `narrative: null` and a `narrativeError` field (HTTP 200).
+ *
+ * ⚠ NEVER expose the Anthropic API key client-side.
  *
  * Request body:
  * {
- *   studentName, enrolledGrade, quantitativeGE, verbalGE,
- *   compositeGE, growthGap, strengths[], growthAreas[]
+ *   studentName: string,
+ *   enrolledGrade: number,
+ *   modules: ModuleReportData[]
  * }
  *
  * Response:
- * { narrative: "3-paragraph personalized narrative..." }
+ * {
+ *   report: CompositeReport,
+ *   narrative: string | null,
+ *   narrativeError?: string
+ * }
  */
 export async function POST(request: NextRequest) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  let body: {
+    studentName?: string;
+    enrolledGrade?: number;
+    modules?: ModuleReportData[];
+  };
 
-  if (!apiKey) {
+  try {
+    body = await request.json();
+  } catch (err) {
     return NextResponse.json(
-      {
-        error: "ANTHROPIC_API_KEY not configured",
-        hint: "The structured local report is still complete without the narrative.",
-      },
-      { status: 503 }
+      { error: "Invalid JSON body", details: String(err) },
+      { status: 400 }
     );
   }
 
+  const studentName = body.studentName ?? "Student";
+  const enrolledGrade = body.enrolledGrade ?? 0;
+  const modules = body.modules ?? [];
+
+  const report = generateCompositeReport({
+    studentName,
+    enrolledGrade,
+    modules,
+  });
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({
+      report,
+      narrative: null,
+      narrativeError:
+        "ANTHROPIC_API_KEY not configured — local report is complete without the narrative.",
+    });
+  }
+
   try {
-    const body = await request.json();
+    const strongTypes = report.composite?.strongTypes ?? [];
+    const weakTypes = report.composite?.weakTypes ?? [];
+    const compositeGE = report.composite?.geScore ?? null;
+    const growthGap = report.composite?.growthGap ?? null;
+    const quantitativeGE =
+      modules.find((m) => m.module === "quantitative")?.geScore ?? null;
+    const verbalGE =
+      modules.find((m) => m.module === "verbal")?.geScore ?? null;
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -51,14 +94,14 @@ export async function POST(request: NextRequest) {
             content: `You are a school psychologist writing a quarterly assessment summary for a Lion's Pen student.
 Write a 3-paragraph personalized narrative based on this scoring data:
 
-Student: ${body.studentName ?? "Student"}
-Grade: ${body.enrolledGrade}
-Quantitative GE: ${body.quantitativeGE ?? "N/A"}
-Verbal GE: ${body.verbalGE ?? "N/A"}
-Composite GE: ${body.compositeGE ?? "N/A"}
-Growth Gap: ${body.growthGap ?? "N/A"}
-Strengths: ${body.strengths?.join(", ") ?? "N/A"}
-Growth Areas: ${body.growthAreas?.join(", ") ?? "N/A"}
+Student: ${studentName}
+Grade: ${enrolledGrade}
+Quantitative GE: ${quantitativeGE ?? "N/A"}
+Verbal GE: ${verbalGE ?? "N/A"}
+Composite GE: ${compositeGE ?? "N/A"}
+Growth Gap: ${growthGap ?? "N/A"}
+Strengths: ${strongTypes.length > 0 ? strongTypes.join(", ") : "N/A"}
+Growth Areas: ${weakTypes.length > 0 ? weakTypes.join(", ") : "N/A"}
 
 Write in a warm, professional tone suitable for parents and educators.
 Focus on celebrating cognitive strengths while framing growth areas as opportunities.
@@ -70,18 +113,22 @@ Reference the Grade Equivalent score and what it means relative to national norm
 
     if (!response.ok) {
       const errText = await response.text();
-      return NextResponse.json(
-        { error: "Anthropic API error", details: errText },
-        { status: 502 }
-      );
+      return NextResponse.json({
+        report,
+        narrative: null,
+        narrativeError: `Anthropic API error: ${errText}`,
+      });
     }
 
     const data = await response.json();
-    return NextResponse.json({ narrative: data.content[0].text });
+    const narrative: string = data?.content?.[0]?.text ?? "";
+
+    return NextResponse.json({ report, narrative: narrative || null });
   } catch (err) {
-    return NextResponse.json(
-      { error: "Failed to generate report", details: String(err) },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      report,
+      narrative: null,
+      narrativeError: `Narrative generation failed: ${String(err)}`,
+    });
   }
 }
