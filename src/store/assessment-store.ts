@@ -1,15 +1,40 @@
 import { create } from "zustand";
-import type { Module, Tier, Question, QuestionType, PercentileBand } from "@/types/database";
-import { adjustTier, getStartingTier } from "@/lib/adaptive";
+import type {
+  Module,
+  Tier,
+  Question,
+  QuestionType,
+  PercentileBand,
+  PartNumber,
+} from "@/types/database";
 import {
-  calculateGEScore,
-  getPercentileBand,
-  calculateGrowthGap,
-  identifyWeakTypes,
-  getHighestTierReached,
-} from "@/lib/scoring";
+  adjustTier,
+  getStartingTier,
+  QUESTIONS_PER_SESSION,
+  PARTS_PER_MODULE,
+} from "@/lib/adaptive";
+import { scoreModule, type ScoringAnswer } from "@/lib/scoring";
 
-interface ModuleResult {
+interface PartState {
+  completed: boolean;
+  tierHistory: Tier[];
+  answers: ScoringAnswer[];
+}
+
+type ModuleSessions = Record<PartNumber, PartState>;
+
+const emptyPart = (): PartState => ({
+  completed: false,
+  tierHistory: [],
+  answers: [],
+});
+
+const emptyModuleSessions = (): ModuleSessions => ({
+  1: emptyPart(),
+  2: emptyPart(),
+});
+
+export interface ModuleResult {
   module: Module;
   rawScore: number;
   totalQuestions: number;
@@ -26,100 +51,142 @@ interface AssessmentState {
   studentName: string;
   enrolledGrade: number;
 
-  /* Session state */
+  /* Active sitting (one part at a time) */
   currentModule: Module | null;
+  currentPart: PartNumber | null;
   currentTier: Tier;
-  usedQuestionIds: string[];
   currentQuestion: Question | null;
   totalAnswered: number;
   consecutiveCorrect: number;
   consecutiveIncorrect: number;
-  isComplete: boolean;
+  isPartComplete: boolean;
   isLoading: boolean;
 
-  /* Answer tracking for scoring */
-  correctDifficultyWeights: number[];
-  tierHistory: Tier[];
-  answers: { type: QuestionType; correct: boolean }[];
+  /* Per-module persistence (across both parts) */
+  usedQuestionIdsByModule: Record<Module, string[]>;
+  sessions: Record<Module, ModuleSessions>;
 
-  /* Completed module results */
-  completedModules: Module[];
-  results: ModuleResult[];
+  /* Final per-module aggregated results (set when both parts of a module are done) */
+  moduleResults: ModuleResult[];
 
   /* Actions */
   setStudent: (name: string, grade: number) => void;
-  startModule: (module: Module) => void;
+  startPart: (module: Module, part: PartNumber) => void;
   setCurrentQuestion: (question: Question) => void;
   setLoading: (loading: boolean) => void;
   recordAnswer: (selectedIndex: number) => void;
-  completeModule: () => void;
+  completePart: () => ModuleResult | null;
   reset: () => void;
+
+  /* Selectors / helpers */
+  isPartUnlocked: (module: Module, part: PartNumber) => boolean;
+  isPartDone: (module: Module, part: PartNumber) => boolean;
+  allPartsCompleted: () => boolean;
 }
 
-const QUESTIONS_PER_SESSION = 20;
-
-export const useAssessmentStore = create<AssessmentState>((set, get) => ({
+const INITIAL_STATE = {
   studentName: "",
   enrolledGrade: 5,
 
-  currentModule: null,
-  currentTier: 2,
-  usedQuestionIds: [],
-  currentQuestion: null,
+  currentModule: null as Module | null,
+  currentPart: null as PartNumber | null,
+  currentTier: 2 as Tier,
+  currentQuestion: null as Question | null,
   totalAnswered: 0,
   consecutiveCorrect: 0,
   consecutiveIncorrect: 0,
-  isComplete: false,
+  isPartComplete: false,
   isLoading: false,
 
-  correctDifficultyWeights: [],
-  tierHistory: [],
-  answers: [],
+  usedQuestionIdsByModule: {
+    quantitative: [] as string[],
+    verbal: [] as string[],
+  } as Record<Module, string[]>,
 
-  completedModules: [],
-  results: [],
+  sessions: {
+    quantitative: emptyModuleSessions(),
+    verbal: emptyModuleSessions(),
+  } as Record<Module, ModuleSessions>,
+
+  moduleResults: [] as ModuleResult[],
+};
+
+export const useAssessmentStore = create<AssessmentState>((set, get) => ({
+  ...INITIAL_STATE,
 
   setStudent: (name, grade) =>
     set({ studentName: name, enrolledGrade: grade }),
 
-  startModule: (module) => {
-    const grade = get().enrolledGrade;
-    const startingTier = getStartingTier(grade);
+  startPart: (module, part) => {
+    const state = get();
+
+    if (part === 2 && !state.sessions[module][1].completed) {
+      console.warn(
+        `Cannot start ${module} Part 2 — Part 1 is not yet complete.`
+      );
+      return;
+    }
+    if (state.sessions[module][part].completed) {
+      console.warn(
+        `Cannot restart ${module} Part ${part} — already completed.`
+      );
+      return;
+    }
+
+    const startingTier = getStartingTier(state.enrolledGrade);
+
+    const updatedSessions: Record<Module, ModuleSessions> = {
+      ...state.sessions,
+      [module]: {
+        ...state.sessions[module],
+        [part]: {
+          completed: false,
+          tierHistory: [startingTier],
+          answers: [],
+        },
+      },
+    };
+
     set({
       currentModule: module,
+      currentPart: part,
       currentTier: startingTier,
-      usedQuestionIds: [],
       currentQuestion: null,
       totalAnswered: 0,
       consecutiveCorrect: 0,
       consecutiveIncorrect: 0,
-      isComplete: false,
+      isPartComplete: false,
       isLoading: false,
-      correctDifficultyWeights: [],
-      tierHistory: [startingTier],
-      answers: [],
+      sessions: updatedSessions,
     });
   },
 
   setCurrentQuestion: (question) =>
-    set((state) => ({
-      currentQuestion: question,
-      usedQuestionIds: [...state.usedQuestionIds, question.id],
-    })),
+    set((state) => {
+      if (!state.currentModule) return state;
+      return {
+        currentQuestion: question,
+        usedQuestionIdsByModule: {
+          ...state.usedQuestionIdsByModule,
+          [state.currentModule]: [
+            ...state.usedQuestionIdsByModule[state.currentModule],
+            question.id,
+          ],
+        },
+      };
+    }),
 
   setLoading: (loading) => set({ isLoading: loading }),
 
   recordAnswer: (selectedIndex) =>
     set((state) => {
       const question = state.currentQuestion;
-      if (!question) return state;
+      const mod = state.currentModule;
+      const part = state.currentPart;
+      if (!question || !mod || !part) return state;
 
       const isCorrect = selectedIndex === question.correct_answer;
       const totalAnswered = state.totalAnswered + 1;
-
-      const correctDifficultyWeights = isCorrect
-        ? [...state.correctDifficultyWeights, question.difficulty_weight]
-        : state.correctDifficultyWeights;
 
       const newConsecutiveCorrect = isCorrect
         ? state.consecutiveCorrect + 1
@@ -128,96 +195,123 @@ export const useAssessmentStore = create<AssessmentState>((set, get) => ({
         ? 0
         : state.consecutiveIncorrect + 1;
 
-      const answers = [
-        ...state.answers,
-        { type: question.type, correct: isCorrect },
-      ];
-
-      // Apply adaptive branching logic
       const { newTier, shouldEnd, resetCorrect, resetIncorrect } = adjustTier(
         state.currentTier,
         newConsecutiveCorrect,
         newConsecutiveIncorrect
       );
 
-      const tierHistory = [...state.tierHistory, newTier];
+      const partState = state.sessions[mod][part];
+      const updatedAnswers: ScoringAnswer[] = [
+        ...partState.answers,
+        {
+          type: question.type,
+          correct: isCorrect,
+          difficulty_weight: question.difficulty_weight,
+        },
+      ];
+      const updatedTierHistory: Tier[] = [...partState.tierHistory, newTier];
 
-      const isComplete =
+      const isPartComplete =
         shouldEnd || totalAnswered >= QUESTIONS_PER_SESSION;
 
       return {
         totalAnswered,
-        correctDifficultyWeights,
+        currentTier: newTier,
         consecutiveCorrect: resetCorrect ? 0 : newConsecutiveCorrect,
         consecutiveIncorrect: resetIncorrect ? 0 : newConsecutiveIncorrect,
-        currentTier: newTier,
-        tierHistory,
-        answers,
-        isComplete,
+        isPartComplete,
+        sessions: {
+          ...state.sessions,
+          [mod]: {
+            ...state.sessions[mod],
+            [part]: {
+              ...partState,
+              answers: updatedAnswers,
+              tierHistory: updatedTierHistory,
+            },
+          },
+        },
       };
     }),
 
-  completeModule: () =>
-    set((state) => {
-      const rawScore = state.correctDifficultyWeights.length;
-      const totalQuestions = state.totalAnswered;
-      const geScore = calculateGEScore(state.correctDifficultyWeights);
-      const percentileBand = getPercentileBand(rawScore, totalQuestions);
-      const growthGap = calculateGrowthGap(geScore, state.enrolledGrade);
-      const tierReached = getHighestTierReached(state.tierHistory);
-      const weakTypes = identifyWeakTypes(state.answers);
+  completePart: () => {
+    const state = get();
+    const mod = state.currentModule;
+    const part = state.currentPart;
+    if (!mod || !part) return null;
 
-      // Strong types = types where ≥75% correct
-      const typeStats: Record<string, { total: number; correct: number }> = {};
-      for (const a of state.answers) {
-        if (!typeStats[a.type]) typeStats[a.type] = { total: 0, correct: 0 };
-        typeStats[a.type].total++;
-        if (a.correct) typeStats[a.type].correct++;
-      }
-      const strongTypes: QuestionType[] = [];
-      for (const [type, stats] of Object.entries(typeStats)) {
-        if (stats.correct / stats.total >= 0.75) {
-          strongTypes.push(type as QuestionType);
-        }
-      }
+    const updatedSessions: Record<Module, ModuleSessions> = {
+      ...state.sessions,
+      [mod]: {
+        ...state.sessions[mod],
+        [part]: {
+          ...state.sessions[mod][part],
+          completed: true,
+        },
+      },
+    };
 
-      const result: ModuleResult = {
-        module: state.currentModule!,
-        rawScore,
-        totalQuestions,
-        geScore,
-        percentileBand,
-        growthGap,
-        tierReached,
-        strongTypes,
-        weakTypes,
-      };
+    let moduleResults = state.moduleResults;
 
-      return {
-        completedModules: [...state.completedModules, state.currentModule!],
-        results: [...state.results, result],
-        currentModule: null,
-        currentQuestion: null,
-      };
-    }),
+    const bothPartsDone =
+      updatedSessions[mod][1].completed &&
+      updatedSessions[mod][2].completed;
 
-  reset: () =>
+    if (bothPartsDone && !moduleResults.some((r) => r.module === mod)) {
+      const part1 = updatedSessions[mod][1];
+      const part2 = updatedSessions[mod][2];
+
+      const result = scoreModule({
+        enrolledGrade: state.enrolledGrade,
+        module: mod,
+        part1Answers: part1.answers,
+        part2Answers: part2.answers,
+        part1TierHistory: part1.tierHistory,
+        part2TierHistory: part2.tierHistory,
+      });
+
+      moduleResults = [...moduleResults, { ...result, module: mod }];
+    }
+
     set({
-      studentName: "",
-      enrolledGrade: 5,
+      sessions: updatedSessions,
+      moduleResults,
       currentModule: null,
-      currentTier: 2,
-      usedQuestionIds: [],
+      currentPart: null,
       currentQuestion: null,
       totalAnswered: 0,
       consecutiveCorrect: 0,
       consecutiveIncorrect: 0,
-      isComplete: false,
-      isLoading: false,
-      correctDifficultyWeights: [],
-      tierHistory: [],
-      answers: [],
-      completedModules: [],
-      results: [],
-    }),
+      isPartComplete: false,
+    });
+
+    return moduleResults.find((r) => r.module === mod) ?? null;
+  },
+
+  reset: () => set({ ...INITIAL_STATE,
+    usedQuestionIdsByModule: { quantitative: [], verbal: [] },
+    sessions: {
+      quantitative: emptyModuleSessions(),
+      verbal: emptyModuleSessions(),
+    },
+    moduleResults: [],
+  }),
+
+  isPartUnlocked: (module, part) => {
+    if (part === 1) return true;
+    return get().sessions[module][1].completed;
+  },
+
+  isPartDone: (module, part) => get().sessions[module][part].completed,
+
+  allPartsCompleted: () => {
+    const { sessions } = get();
+    const modules: Module[] = ["quantitative", "verbal"];
+    return modules.every((m) =>
+      ([1, 2] as PartNumber[]).every((p) => sessions[m][p].completed)
+    );
+  },
 }));
+
+export { QUESTIONS_PER_SESSION, PARTS_PER_MODULE };

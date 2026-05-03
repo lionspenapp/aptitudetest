@@ -46,18 +46,34 @@ export interface Question {
   created_at: string;
 }
 
+export type PartNumber = 1 | 2;
+
 export interface AssessmentSession {
   id: string;
   student_id: string;
   quarter: 1 | 2 | 3 | 4;
   school_year: string;
   module: Module;
+  part_number: PartNumber;
   raw_score: number;
   ge_score: number;
   percentile_band: PercentileBand;
   tier_reached: Tier;
   weak_types: QuestionType[];
   completed_at: string;
+}
+
+/**
+ * In-memory representation of a single 20-question sitting.
+ * Each module has PARTS_PER_MODULE such sessions (Part 1 + Part 2).
+ */
+export interface ModuleSession {
+  module: Module;
+  part_number: PartNumber;
+  tier_history: Tier[];
+  used_question_ids: string[];
+  answers: { type: QuestionType; correct: boolean; difficulty_weight: number }[];
+  completed: boolean;
 }
 
 export interface Database {
