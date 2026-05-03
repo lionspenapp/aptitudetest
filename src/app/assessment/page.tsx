@@ -2,49 +2,55 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import ModuleMenu from "@/components/ModuleMenu";
+import ModuleMenu, { type PartStatus } from "@/components/ModuleMenu";
 import QuestionCard from "@/components/QuestionCard";
-import { useAssessmentStore } from "@/store/assessment-store";
-import type { Module, Question } from "@/types/database";
+import {
+  useAssessmentStore,
+  QUESTIONS_PER_SESSION,
+} from "@/store/assessment-store";
+import type { Module, PartNumber, Question } from "@/types/database";
 
 export default function AssessmentPage() {
   const router = useRouter();
   const {
     studentName,
-    enrolledGrade,
     currentModule,
+    currentPart,
     currentTier,
-    usedQuestionIds,
+    usedQuestionIdsByModule,
     totalAnswered,
-    isComplete,
-    completedModules,
-    startModule,
+    isPartComplete,
+    sessions,
+    moduleResults,
+    startPart,
     setCurrentQuestion,
     recordAnswer,
-    completeModule,
+    completePart,
+    isPartUnlocked,
+    isPartDone,
+    allPartsCompleted,
   } = useAssessmentStore();
 
   const [question, setQuestion] = useState<Question | null>(null);
   const [loading, setLoading] = useState(false);
   const [needsFetch, setNeedsFetch] = useState(false);
 
-  // Redirect to setup if no student name
   useEffect(() => {
     if (!studentName) {
       router.push("/");
     }
   }, [studentName, router]);
 
-  // Trigger fetch when module starts
   useEffect(() => {
-    if (currentModule && !question && !loading) {
+    if (currentModule && currentPart && !question && !loading) {
       setNeedsFetch(true);
     }
-  }, [currentModule, question, loading]);
+  }, [currentModule, currentPart, question, loading]);
 
-  // Fetch question when needed
   useEffect(() => {
-    if (!needsFetch || !currentModule || isComplete) return;
+    if (!needsFetch || !currentModule || !currentPart || isPartComplete) {
+      return;
+    }
 
     setNeedsFetch(false);
     setLoading(true);
@@ -55,20 +61,16 @@ export default function AssessmentPage() {
       body: JSON.stringify({
         currentModule,
         currentTier,
-        usedIds: usedQuestionIds,
+        usedIds: usedQuestionIdsByModule[currentModule] ?? [],
       }),
     })
-      .then((res) => {
-        if (res.ok) return res.json();
-        return null;
-      })
+      .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.question) {
           setQuestion(data.question);
           setCurrentQuestion(data.question);
         } else {
-          // No more questions — end module
-          handleModuleComplete();
+          handlePartComplete();
         }
       })
       .catch((err) => {
@@ -79,70 +81,129 @@ export default function AssessmentPage() {
       });
   }, [needsFetch]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Handle session completion
   useEffect(() => {
-    if (isComplete && currentModule) {
-      handleModuleComplete();
+    if (isPartComplete && currentModule && currentPart) {
+      handlePartComplete();
     }
-  }, [isComplete]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isPartComplete]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function handleModuleComplete() {
-    completeModule();
+  async function persistPartIfPossible(
+    mod: Module,
+    part: PartNumber,
+    rawScore: number,
+    geScore: number,
+    percentileBand: string,
+    tierReached: number,
+    weakTypes: string[]
+  ) {
+    try {
+      await fetch("/api/save-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          module: mod,
+          partNumber: part,
+          rawScore,
+          geScore,
+          percentileBand,
+          tierReached,
+          weakTypes,
+        }),
+      });
+    } catch {
+      // Persistence is best-effort — local report is unaffected.
+    }
+  }
+
+  function handlePartComplete() {
+    const mod = currentModule;
+    const part = currentPart;
+    if (!mod || !part) return;
+
+    const partState = sessions[mod][part];
+    const rawScore = partState.answers.filter((a) => a.correct).length;
+
+    completePart();
     setQuestion(null);
-    // If both modules done, go to results
-    if (completedModules.length + 1 >= 2) {
+
+    void persistPartIfPossible(
+      mod,
+      part,
+      rawScore,
+      0,
+      "",
+      Math.max(...(partState.tierHistory.length ? partState.tierHistory : [1])),
+      []
+    );
+
+    if (allPartsCompleted()) {
       router.push("/results");
     }
   }
 
-  const handleSelectModule = (module: Module) => {
+  const handleSelectPart = (mod: Module, part: PartNumber) => {
     setQuestion(null);
-    startModule(module);
+    startPart(mod, part);
     setNeedsFetch(true);
+  };
+
+  const handleViewReport = () => {
+    router.push("/results");
   };
 
   const handleAnswer = (selectedIndex: number) => {
     recordAnswer(selectedIndex);
-
-    // Clear current question and fetch next after feedback delay
     setTimeout(() => {
       setQuestion(null);
       setNeedsFetch(true);
     }, 1300);
   };
 
-  // No student — wait for redirect
   if (!studentName) return null;
 
-  // No module selected — show module menu
-  if (!currentModule) {
+  if (!currentModule || !currentPart) {
+    const partStatuses: PartStatus[] = (
+      ["quantitative", "verbal"] as Module[]
+    ).flatMap((m) =>
+      ([1, 2] as PartNumber[]).map((p) => ({
+        module: m,
+        part: p,
+        done: isPartDone(m, p),
+        unlocked: isPartUnlocked(m, p),
+      }))
+    );
+
     return (
       <ModuleMenu
-        onSelectModule={handleSelectModule}
-        completedModules={completedModules}
+        partStatuses={partStatuses}
+        allDone={allPartsCompleted() && moduleResults.length > 0}
+        onSelectPart={handleSelectPart}
+        onViewReport={handleViewReport}
       />
     );
   }
 
-  // Loading state
   if (loading && !question) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#FAF7F0]">
         <div className="text-center">
           <div className="w-10 h-10 border-4 border-[#B8892A] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
           <p className="text-[#1A2744]/60 font-medium">Loading question...</p>
+          <p className="text-xs text-[#1A2744]/40 mt-2">
+            {currentModule === "quantitative" ? "Quantitative" : "Verbal"} ·
+            Part {currentPart}
+          </p>
         </div>
       </div>
     );
   }
 
-  // Show question
   if (question) {
     return (
       <QuestionCard
         question={question}
         questionNumber={totalAnswered + 1}
-        totalQuestions={20}
+        totalQuestions={QUESTIONS_PER_SESSION}
         onAnswer={handleAnswer}
       />
     );
