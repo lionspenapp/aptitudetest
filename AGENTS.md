@@ -12,7 +12,7 @@ Lion's Pen Aptitude Assessment — a Next.js 16 (App Router) + Supabase + Tailwi
 npm run dev          # starts on http://localhost:3000
 ```
 
-The app starts without a live Supabase connection (placeholder env vars in `.env.local`). Pages render; Supabase queries will fail until real credentials are supplied.
+Supabase credentials are available as environment secrets (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`). Ensure `.env.local` contains them before starting — the dev server reads env vars from that file at startup.
 
 ### Lint / Build / Test
 
@@ -29,10 +29,12 @@ Migration SQL lives in `supabase/migrations/`. Apply with the Supabase CLI (`sup
 
 ### Environment variables
 
-Copy `.env.local.example` → `.env.local` and fill in Supabase credentials. `ANTHROPIC_API_KEY` is optional (enables narrative report generation via `/api/generate-report`).
+`NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are injected as environment secrets. On startup, write them into `.env.local` so Next.js can read them (the update script does not do this — do it in your session before running `npm run dev`). `ANTHROPIC_API_KEY` is optional (enables narrative report generation via `/api/generate-report`). See `.env.local.example` for the template.
 
 ### Key caveats
 
 - The Supabase client files (`src/lib/supabase-client.ts`, `src/lib/supabase-server.ts`) reference `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` at runtime. The app will start but Supabase calls will throw if these are placeholders.
 - Zustand store (`src/store/assessment-store.ts`) holds session state in memory — no persistence yet.
 - `src/app/api/generate-report/route.ts` is a server-side API route. Never expose `ANTHROPIC_API_KEY` to the client.
+- `npm run lint` exits with code 1 due to pre-existing ESLint errors in `src/app/assessment/page.tsx` (React hooks `set-state-in-effect` and `immutability` rules). These are not regressions — do not attempt to fix unless explicitly asked.
+- If `.env.local` does not exist, copy it from `.env.local.example` before starting the dev server.
