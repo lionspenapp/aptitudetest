@@ -85,12 +85,15 @@ export function buildExcludedIdsClause(usedIds: string[]): string {
 
 /**
  * Fetch the next question from Supabase, filtered by module and tier,
- * excluding already-used question IDs.
+ * excluding already-used question IDs. Picks randomly from the candidate
+ * pool, preferring question types that haven't appeared in the last few
+ * questions (so the student doesn't get e.g. five analogies in a row).
  */
 export async function fetchNextQuestion(
   currentModule: Module,
   currentTier: Tier,
-  usedIds: string[]
+  usedIds: string[],
+  recentTypes: QuestionType[] = []
 ): Promise<Question | null> {
   const supabase = createClient();
 
@@ -99,10 +102,39 @@ export async function fetchNextQuestion(
     .select("*")
     .eq("module", currentModule)
     .eq("tier", currentTier)
-    .not("id", "in", buildExcludedIdsClause(usedIds))
-    .limit(1)
-    .single();
+    .not("id", "in", buildExcludedIdsClause(usedIds));
 
-  if (error || !data) return null;
-  return data as Question;
+  if (error || !data || data.length === 0) return null;
+  return pickDiverseQuestion(data as Question[], recentTypes);
+}
+
+/**
+ * Pick a question from `candidates`, preferring types that haven't appeared
+ * in the last few questions. Used by both the API route and any in-process
+ * caller of fetchNextQuestion.
+ */
+export function pickDiverseQuestion(
+  candidates: Question[],
+  recentTypes: QuestionType[]
+): Question | null {
+  if (candidates.length === 0) return null;
+
+  const window = recentTypes.slice(-6);
+  const typeFrequency = new Map<string, number>();
+  for (const t of window) {
+    typeFrequency.set(t, (typeFrequency.get(t) ?? 0) + 1);
+  }
+
+  let minFreq = Infinity;
+  const buckets = new Map<number, Question[]>();
+  for (const c of candidates) {
+    const freq = typeFrequency.get(c.type) ?? 0;
+    if (freq < minFreq) minFreq = freq;
+    const bucket = buckets.get(freq) ?? [];
+    bucket.push(c);
+    buckets.set(freq, bucket);
+  }
+
+  const preferred = buckets.get(minFreq) ?? candidates;
+  return preferred[Math.floor(Math.random() * preferred.length)];
 }

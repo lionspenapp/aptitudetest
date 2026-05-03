@@ -56,6 +56,10 @@ export default function AssessmentPage() {
 
     setLoading(true);
 
+    const recentTypes = sessions[currentModule][currentPart].answers
+      .slice(-6)
+      .map((a) => a.type);
+
     fetch("/api/next-question", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -63,6 +67,7 @@ export default function AssessmentPage() {
         currentModule,
         currentTier,
         usedIds: usedQuestionIdsByModule[currentModule] ?? [],
+        recentTypes,
       }),
     })
       .then((res) => (res.ok ? res.json() : null))
