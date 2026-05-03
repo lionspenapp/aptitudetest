@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ModuleMenu from "@/components/ModuleMenu";
 import QuestionCard from "@/components/QuestionCard";
@@ -11,12 +11,8 @@ export default function AssessmentPage() {
   const router = useRouter();
   const {
     studentName,
-    enrolledGrade,
     currentModule,
-    currentTier,
-    usedQuestionIds,
     totalAnswered,
-    isComplete,
     completedModules,
     startModule,
     setCurrentQuestion,
@@ -26,7 +22,6 @@ export default function AssessmentPage() {
 
   const [question, setQuestion] = useState<Question | null>(null);
   const [loading, setLoading] = useState(false);
-  const [needsFetch, setNeedsFetch] = useState(false);
 
   // Redirect to setup if no student name
   useEffect(() => {
@@ -35,39 +30,37 @@ export default function AssessmentPage() {
     }
   }, [studentName, router]);
 
-  // Trigger fetch when module starts
-  useEffect(() => {
-    if (currentModule && !question && !loading) {
-      setNeedsFetch(true);
+  const handleModuleComplete = useCallback(() => {
+    completeModule();
+    setQuestion(null);
+    const { completedModules: updated } = useAssessmentStore.getState();
+    if (updated.length >= 2) {
+      router.push("/results");
     }
-  }, [currentModule, question, loading]);
+  }, [completeModule, router]);
 
-  // Fetch question when needed
-  useEffect(() => {
-    if (!needsFetch || !currentModule || isComplete) return;
+  const fetchQuestion = useCallback(() => {
+    const { currentModule: mod, currentTier, usedQuestionIds, isComplete } =
+      useAssessmentStore.getState();
+    if (!mod || isComplete) return;
 
-    setNeedsFetch(false);
     setLoading(true);
 
     fetch("/api/next-question", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        currentModule,
+        currentModule: mod,
         currentTier,
         usedIds: usedQuestionIds,
       }),
     })
-      .then((res) => {
-        if (res.ok) return res.json();
-        return null;
-      })
+      .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.question) {
           setQuestion(data.question);
           setCurrentQuestion(data.question);
         } else {
-          // No more questions — end module
           handleModuleComplete();
         }
       })
@@ -77,39 +70,33 @@ export default function AssessmentPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, [needsFetch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [setCurrentQuestion, handleModuleComplete]);
 
-  // Handle session completion
-  useEffect(() => {
-    if (isComplete && currentModule) {
-      handleModuleComplete();
-    }
-  }, [isComplete]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function handleModuleComplete() {
-    completeModule();
-    setQuestion(null);
-    // If both modules done, go to results
-    if (completedModules.length + 1 >= 2) {
-      router.push("/results");
-    }
-  }
-
-  const handleSelectModule = (module: Module) => {
-    setQuestion(null);
-    startModule(module);
-    setNeedsFetch(true);
-  };
-
-  const handleAnswer = (selectedIndex: number) => {
-    recordAnswer(selectedIndex);
-
-    // Clear current question and fetch next after feedback delay
-    setTimeout(() => {
+  const handleSelectModule = useCallback(
+    (module: Module) => {
       setQuestion(null);
-      setNeedsFetch(true);
-    }, 1300);
-  };
+      startModule(module);
+      fetchQuestion();
+    },
+    [startModule, fetchQuestion],
+  );
+
+  const handleAnswer = useCallback(
+    (selectedIndex: number) => {
+      recordAnswer(selectedIndex);
+
+      setTimeout(() => {
+        const { isComplete } = useAssessmentStore.getState();
+        if (isComplete) {
+          handleModuleComplete();
+        } else {
+          setQuestion(null);
+          fetchQuestion();
+        }
+      }, 1300);
+    },
+    [recordAnswer, fetchQuestion, handleModuleComplete],
+  );
 
   // No student — wait for redirect
   if (!studentName) return null;
