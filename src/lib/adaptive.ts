@@ -1,5 +1,4 @@
-import { createClient } from "@/lib/supabase-client";
-import type { Question, Module, Tier, PartNumber, QuestionType } from "@/types/database";
+import type { Module, Tier, PartNumber, QuestionType } from "@/types/database";
 
 /**
  * Adaptive Engine — manages tier routing and question fetching.
@@ -81,28 +80,4 @@ export function adjustTier(
  */
 export function buildExcludedIdsClause(usedIds: string[]): string {
   return `(${usedIds.length > 0 ? usedIds.join(",") : NIL_UUID})`;
-}
-
-/**
- * Fetch the next question from Supabase, filtered by module and tier,
- * excluding already-used question IDs.
- */
-export async function fetchNextQuestion(
-  currentModule: Module,
-  currentTier: Tier,
-  usedIds: string[]
-): Promise<Question | null> {
-  const supabase = createClient();
-
-  const { data, error } = await supabase
-    .from("questions")
-    .select("*")
-    .eq("module", currentModule)
-    .eq("tier", currentTier)
-    .not("id", "in", buildExcludedIdsClause(usedIds))
-    .limit(1)
-    .single();
-
-  if (error || !data) return null;
-  return data as Question;
 }

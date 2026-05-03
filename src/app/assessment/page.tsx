@@ -33,7 +33,11 @@ export default function AssessmentPage() {
 
   const [question, setQuestion] = useState<Question | null>(null);
   const [loading, setLoading] = useState(false);
-  const [needsFetch, setNeedsFetch] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  // Monotonic counter — every increment guarantees the fetch effect fires
+  // again, even if previous flags were left stale by a part ending naturally.
+  const [fetchToken, setFetchToken] = useState(0);
+  const requestFetch = () => setFetchToken((t) => t + 1);
 
   useEffect(() => {
     if (!studentName) {
@@ -42,18 +46,21 @@ export default function AssessmentPage() {
   }, [studentName, router]);
 
   useEffect(() => {
-    if (currentModule && currentPart && !question && !loading) {
-      setNeedsFetch(true);
-    }
-  }, [currentModule, currentPart, question, loading]);
-
-  useEffect(() => {
-    if (!needsFetch || !currentModule || !currentPart || isPartComplete) {
+    if (
+      fetchToken === 0 ||
+      !currentModule ||
+      !currentPart ||
+      isPartComplete
+    ) {
       return;
     }
 
-    setNeedsFetch(false);
     setLoading(true);
+    setFetchError(null);
+
+    const recentTypes = sessions[currentModule][currentPart].answers
+      .slice(-6)
+      .map((a) => a.type);
 
     fetch("/api/next-question", {
       method: "POST",
@@ -62,24 +69,50 @@ export default function AssessmentPage() {
         currentModule,
         currentTier,
         usedIds: usedQuestionIdsByModule[currentModule] ?? [],
+        recentTypes,
       }),
     })
-      .then((res) => (res.ok ? res.json() : null))
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          const hint =
+            typeof data.hint === "string"
+              ? data.hint
+              : typeof data.error === "string"
+                ? data.error
+                : res.status === 503
+                  ? "The server cannot reach Supabase. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel → Environment Variables, then redeploy."
+                  : typeof data.details === "string"
+                    ? data.details
+                    : `Request failed (${res.status}).`;
+
+          throw new Error(hint);
+        }
+
+        return data as { question?: Question };
+      })
       .then((data) => {
         if (data?.question) {
           setQuestion(data.question);
           setCurrentQuestion(data.question);
-        } else {
-          handlePartComplete();
+          setFetchError(null);
+          return;
         }
+        handlePartComplete();
       })
       .catch((err) => {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Could not load a question (network error). Try again.";
         console.error("Failed to fetch question:", err);
+        setFetchError(message);
       })
       .finally(() => {
         setLoading(false);
       });
-  }, [needsFetch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (isPartComplete && currentModule && currentPart) {
@@ -143,8 +176,10 @@ export default function AssessmentPage() {
 
   const handleSelectPart = (mod: Module, part: PartNumber) => {
     setQuestion(null);
+    setFetchError(null);
+    setLoading(false);
     startPart(mod, part);
-    setNeedsFetch(true);
+    requestFetch();
   };
 
   const handleViewReport = () => {
@@ -155,7 +190,7 @@ export default function AssessmentPage() {
     recordAnswer(selectedIndex);
     setTimeout(() => {
       setQuestion(null);
-      setNeedsFetch(true);
+      requestFetch();
     }, 1300);
   };
 
@@ -193,6 +228,44 @@ export default function AssessmentPage() {
             {currentModule === "quantitative" ? "Quantitative" : "Verbal"} ·
             Part {currentPart}
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!question && fetchError && currentModule && currentPart) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#FAF7F0] p-6">
+        <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-6 shadow-md">
+          <h2 className="text-lg font-semibold text-[#1A2744]">
+            Could not load question
+          </h2>
+          <p className="mt-3 text-sm text-[#1A2744]/80 whitespace-pre-wrap">
+            {fetchError}
+          </p>
+          <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => {
+                setFetchError(null);
+                requestFetch();
+              }}
+              className="rounded-xl bg-[#B8892A] px-4 py-3 font-semibold text-white shadow hover:bg-[#9A7223]"
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFetchError(null);
+                setQuestion(null);
+                router.push("/");
+              }}
+              className="rounded-xl border border-[#1A2744]/20 px-4 py-3 font-semibold text-[#1A2744]"
+            >
+              Back to setup
+            </button>
+          </div>
         </div>
       </div>
     );

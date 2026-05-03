@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { supabaseConfigured } from "@/lib/supabase-env";
 
 interface SetupScreenProps {
   onStart: (studentName: string, gradeLevel: number) => void;
 }
 
 export default function SetupScreen({ onStart }: SetupScreenProps) {
+  const supabaseOk = supabaseConfigured();
   const [studentName, setStudentName] = useState("");
   const [gradeLevel, setGradeLevel] = useState<number>(5);
 
@@ -36,6 +38,27 @@ export default function SetupScreen({ onStart }: SetupScreenProps) {
           onSubmit={handleSubmit}
           className="bg-white rounded-2xl shadow-lg border border-[#B8892A]/20 p-8"
         >
+          {!supabaseOk ? (
+            <div
+              role="alert"
+              className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900"
+            >
+              <p className="font-semibold">Supabase is not configured</p>
+              <p className="mt-1 opacity-90">
+                Copy <code className="rounded bg-red-100 px-1">.env.local.example</code> to{" "}
+                <code className="rounded bg-red-100 px-1">.env.local</code> and set{" "}
+                <code className="rounded bg-red-100 px-1">
+                  NEXT_PUBLIC_SUPABASE_URL
+                </code>{" "}
+                and{" "}
+                <code className="rounded bg-red-100 px-1">
+                  NEXT_PUBLIC_SUPABASE_ANON_KEY
+                </code>
+                . Then restart <code className="rounded bg-red-100 px-1">npm run dev</code>.
+              </p>
+            </div>
+          ) : null}
+
           <h2 className="text-xl font-semibold text-[#1A2744] mb-6">
             Student Setup
           </h2>
