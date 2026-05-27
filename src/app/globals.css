@@ -1,26 +1,56 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --canvas-parchment: #F5F0E8;
+  --canvas-parchment-light: #FFFDF9;
+  --lapis: #1A237E;
+  --lapis-dark: #0D1B2A;
+  --gold: #D4AF37;
+  --gold-dark: #B38F1E;
+  --slate: #1A1710;
+  --slate-muted: #2B2D42;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-canvas: var(--canvas-parchment);
+  --color-canvas-light: var(--canvas-parchment-light);
+  --color-lapis: var(--lapis);
+  --color-lapis-dark: var(--lapis-dark);
+  --color-gold: var(--gold);
+  --color-gold-dark: var(--gold-dark);
+  --color-slate: var(--slate);
+  --color-slate-muted: var(--slate-muted);
+  --font-serif: var(--font-lora);
+  --font-sans: var(--font-inter);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--canvas-parchment);
+  color: var(--slate);
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-lora), Georgia, serif;
+  color: var(--lapis-dark);
+}
+
+.btn-primary {
+  @apply bg-gold text-lapis-dark font-semibold px-6 py-3 rounded-lg hover:bg-gold-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-secondary {
+  @apply bg-lapis text-white font-semibold px-6 py-3 rounded-lg hover:bg-lapis-dark transition-colors;
+}
+
+.card {
+  @apply bg-canvas-light rounded-2xl shadow-md border border-gold/20 p-6;
+}
+
+.input-field {
+  @apply w-full px-4 py-3 rounded-lg border border-lapis/20 bg-white text-slate focus:outline-none focus:ring-2 focus:ring-gold/50;
+}
+
+.label-text {
+  @apply block text-sm font-medium text-lapis mb-1;
 }
